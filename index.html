@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f5f5f3" />
+    <title>豆点 · 拼豆图纸</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="豆点首页">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+        <span>豆点<span class="brand-en">BEAD DOT</span></span>
+      </a>
+      <div class="topbar-center"><span class="status-dot"></span> 图纸编辑器 <span class="topbar-divider">/</span> <span class="muted">新建图纸</span></div>
+      <div class="topbar-actions">
+        <button class="button button-quiet" id="resetButton" type="button"><span class="icon">↺</span> 重置</button>
+        <button class="button button-dark" id="exportButton" type="button"><span class="icon">↓</span> 导出图纸</button>
+      </div>
+    </header>
+
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="eyebrow">图纸设置 <span>01</span></div>
+        <section class="side-section upload-section">
+          <div class="section-title-row"><h2>导入图片</h2><span class="tiny-label">PNG · JPG · WEBP</span></div>
+          <label class="upload-card" for="imageInput" id="uploadCard">
+            <input id="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif" />
+            <span class="upload-icon" aria-hidden="true">↑</span>
+            <span class="upload-copy"><strong id="uploadTitle">点击上传图片</strong><small id="uploadCaption">或将图片拖到这里</small></span>
+            <span class="upload-arrow" aria-hidden="true">↗</span>
+          </label>
+          <div class="privacy-note"><span>◉</span> 图片仅在本地处理，不会上传</div>
+        </section>
+
+        <section class="side-section dimensions-section">
+          <div class="section-title-row"><h2>方格尺寸</h2><span class="tiny-label">单位：颗</span></div>
+          <div class="dimension-fields">
+            <label class="field-wrap"><span>宽度</span><div class="number-field"><input id="widthInput" type="number" min="8" max="120" value="32" /><span>格</span></div></label>
+            <span class="dimension-x">×</span>
+            <label class="field-wrap"><span>高度</span><div class="number-field"><input id="heightInput" type="number" min="8" max="120" value="32" /><span>格</span></div></label>
+          </div>
+          <input class="range" id="sizeSlider" type="range" min="8" max="80" value="32" aria-label="方格宽度" />
+          <div class="range-labels"><span>8 格</span><span id="sizeReadout">32 × 32</span><span>80 格</span></div>
+          <div class="helper-copy">支持 8–120 格，尺寸越大，图案细节越丰富。</div>
+        </section>
+
+        <section class="side-section fit-section">
+          <div class="section-title-row"><h2>图片适配</h2></div>
+          <div class="segmented" role="group" aria-label="图片适配方式">
+            <button type="button" class="segment active" data-fit="contain">完整显示</button>
+            <button type="button" class="segment" data-fit="cover">铺满画布</button>
+          </div>
+          <p class="helper-copy fit-copy">完整显示图片，不裁切主体。</p>
+        </section>
+
+        <section class="side-section brush-section">
+          <div class="section-title-row"><h2>手动改色</h2><span class="tiny-label">画笔</span></div>
+          <p class="helper-copy">先选一种颜色，再点击图纸上的格子进行修改。</p>
+          <button id="brushButton" class="brush-indicator" type="button">
+            <span class="brush-swatch" id="brushSwatch"></span><span><small>当前画笔</small><strong id="brushName">奶油白</strong></span><span class="brush-hint">从色板选择 ↗</span>
+          </button>
+        </section>
+
+        <div class="sidebar-foot"><span>MADE FOR MAKERS</span><span class="foot-beads"><i></i><i></i><i></i></span></div>
+      </aside>
+
+      <section class="workspace" aria-label="图纸工作区">
+        <div class="workspace-heading">
+          <div><div class="eyebrow workspace-eyebrow">设计画布 <span>02</span></div><h1>拼豆图纸</h1><p class="workspace-subtitle" id="canvasSubtitle">方格画布已就绪，导入图片开始制作</p></div>
+          <div class="canvas-tools">
+            <button class="tool-button active" id="gridToggle" type="button" aria-pressed="true"><span class="tool-grid-icon">▦</span> 显示网格</button>
+            <span class="tool-divider"></span>
+            <span class="canvas-size-pill"><span class="pill-dot"></span><span id="canvasDimensions">32 × 32</span></span>
+          </div>
+        </div>
+
+        <div class="canvas-frame" id="canvasFrame">
+          <div class="canvas-meta"><span><span class="meta-dot"></span> 编辑中</span><span class="mono" id="canvasMetaSize">32 × 32 px</span></div>
+          <div class="canvas-scroller" id="canvasScroller">
+            <div class="canvas-content" id="canvasContent">
+              <canvas id="patternCanvas" aria-label="拼豆图纸画布，可点击格子修改颜色"></canvas>
+            </div>
+          </div>
+          <div class="canvas-footer"><span>点击色板选择画笔 · 点击格子填色</span><span class="mono">BEAD DOT STUDIO</span></div>
+        </div>
+        <div class="print-legend" id="printLegend" aria-label="图纸色号清单"></div>
+        <div class="workspace-bottom"><span><kbd>CLICK</kbd> 色板选色 <span class="bottom-separator">·</span> 点击格子修改</span><span class="save-status"><span></span> 修改自动保存在当前页面</span></div>
+      </section>
+
+      <aside class="inspector" aria-label="颜色与用量">
+        <div class="inspector-head"><div><div class="eyebrow">材料清单 <span>03</span></div><h2>用量与色号</h2></div><button class="more-button" type="button" aria-label="色号说明" title="色号为豆点参考色号">···</button></div>
+        <div class="stats-card">
+          <div class="stat-top"><span>预计珠子总数</span><span class="stat-spark" aria-hidden="true">✳</span></div>
+          <div class="stat-number"><strong id="totalCount">1,024</strong><span>颗</span></div>
+          <div class="stat-bottom"><span><span class="stat-dot"></span><span id="usedColors">6</span> 种颜色</span><span class="stat-caption">不含备用损耗</span></div>
+        </div>
+        <div class="palette-heading"><div><h3>色号清单</h3><p>选择颜色作为画笔</p></div><span class="palette-count" id="paletteCount">12 COLORS</span></div>
+        <div class="palette-list" id="paletteList" role="list" aria-label="拼豆色号列表"></div>
+        <div class="inspector-note"><span class="note-icon">i</span><p>色号为参考编号，不同品牌的拼豆颜色可能略有差异。</p></div>
+        <button class="print-button" id="printButton" type="button"><span>▤</span> 打印图纸 <span class="print-arrow">↗</span></button>
+      </aside>
+    </main>
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </body>
+</html>
