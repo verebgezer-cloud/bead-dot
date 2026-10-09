@@ -787,7 +787,7 @@
     return adjusted;
   }
 
-  function quantizeGridPixels(pixels, sourceWidth, sourceHeight, gridWidth, gridHeight, outsideMask) {
+  function quantizeGridPixels(pixels, sourceWidth, sourceHeight, gridWidth, gridHeight, outsideMask, preferBlockCenter = false) {
     const adjusted = adjustedPixels(pixels, outsideMask);
     const toLinear = (value) => {
       const channel = value / 255;
@@ -799,18 +799,24 @@
     };
     const pattern = new Array(gridWidth * gridHeight).fill(-1);
 
-    // Each bead gets one representative color from the source area it covers.
-    // Average in linear RGB so bright and dark samples combine more naturally.
+    // AI pixel art can contain antialiased transitions between flat blocks. Use
+    // the center of each bead's 4×4 sample to avoid mixing two adjacent blocks.
+    // Ordinary photos keep the full-area linear average for a smoother reduction.
     for (let gridY = 0; gridY < gridHeight; gridY += 1) {
       const top = Math.floor(gridY * sourceHeight / gridHeight);
       const bottom = Math.max(top + 1, Math.floor((gridY + 1) * sourceHeight / gridHeight));
       for (let gridX = 0; gridX < gridWidth; gridX += 1) {
         const left = Math.floor(gridX * sourceWidth / gridWidth);
         const right = Math.max(left + 1, Math.floor((gridX + 1) * sourceWidth / gridWidth));
-        const cellArea = (bottom - top) * (right - left);
+        const fullCellArea = (bottom - top) * (right - left);
+        const sampleTop = preferBlockCenter ? top + Math.floor((bottom - top) / 2) : top;
+        const sampleBottom = preferBlockCenter ? Math.min(bottom, sampleTop + 1) : bottom;
+        const sampleLeft = preferBlockCenter ? left + Math.floor((right - left) / 2) : left;
+        const sampleRight = preferBlockCenter ? Math.min(right, sampleLeft + 1) : right;
+        let usedFullCellFallback = false;
         let red = 0, green = 0, blue = 0, samples = 0;
-        for (let y = top; y < bottom; y += 1) {
-          for (let x = left; x < right; x += 1) {
+        for (let y = sampleTop; y < sampleBottom; y += 1) {
+          for (let x = sampleLeft; x < sampleRight; x += 1) {
             const sourceIndex = y * sourceWidth + x;
             if (outsideMask?.[sourceIndex]) continue;
             const offset = sourceIndex * 4;
@@ -820,8 +826,29 @@
             samples += 1;
           }
         }
+        // If a very thin silhouette feature only touches the center-sample boundary,
+        // fall back to the full bead cell before deciding it is background.
+        if ((preferBlockCenter && !samples) || (!preferBlockCenter && samples / fullCellArea < 0.1)) {
+          usedFullCellFallback = preferBlockCenter;
+          red = 0; green = 0; blue = 0; samples = 0;
+          for (let y = top; y < bottom; y += 1) {
+            for (let x = left; x < right; x += 1) {
+              const sourceIndex = y * sourceWidth + x;
+              if (outsideMask?.[sourceIndex]) continue;
+              const offset = sourceIndex * 4;
+              red += toLinear(adjusted[offset]);
+              green += toLinear(adjusted[offset + 1]);
+              blue += toLinear(adjusted[offset + 2]);
+              samples += 1;
+            }
+          }
+        }
         // Ignore tiny mask specks at the silhouette edge while keeping thin features.
-        if (!samples || samples / cellArea < 0.1) continue;
+        // A center sample intentionally contains only one pixel for a 4×4
+        // AI source cell, so do not apply the full-cell coverage threshold to
+        // that path. Keep the threshold for ordinary photos to suppress tiny
+        // background-mask specks at the silhouette edge.
+        if (!samples || ((!preferBlockCenter || usedFullCellFallback) && samples / fullCellArea < 0.1)) continue;
         const bead = gridY * gridWidth + gridX;
         pattern[bead] = nearestColor(fromLinear(red / samples), fromLinear(green / samples), fromLinear(blue / samples));
       }
@@ -978,7 +1005,7 @@ function applyImage() {
     sampleContext.drawImage(image, (sample.width - width) / 2, (sample.height - height) / 2, width, height);
     const pixels = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
     const backgroundInfo = findEdgeBackgroundMask(pixels, sample.width, sample.height);
-    const pattern = quantizeGridPixels(pixels, sample.width, sample.height, state.designWidth, state.designHeight, backgroundInfo?.outsideMask);
+    const pattern = quantizeGridPixels(pixels, sample.width, sample.height, state.designWidth, state.designHeight, backgroundInfo?.outsideMask, Boolean(state.pixelArtImage));
     clearEditHistory();
     state.pattern = pattern;
     state.pixelArtPlacement = state.pixelArtImage
@@ -1103,7 +1130,7 @@ function applyImage() {
       state.designHeight = dimensions.height;
       state.colorFilter = null; state.guideIndex = 0; state.guideSteps = [];
       applyImage(); updateBoardUI(); updatePixelArtUI(); renderAll();
-      toast(`像素画已生成，并映射为 ${state.designWidth} × ${state.designHeight} 格 MARD 图纸`);
+      toast(`像素画已生成，按格点中心颜色匹配 MARD 221 色号（色卡有限，颜色会略有差异）`);
     } catch (error) {
       if (pendingImageUrl) URL.revokeObjectURL(pendingImageUrl);
       if (requestId === state.aiRequestId) toast(error.message || "AI 像素画生成失败，请检查服务配置");
