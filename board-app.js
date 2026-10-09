@@ -44,6 +44,10 @@
     sourceAspectRatio: 1,
     pixelArtImage: null,
     pixelArtUrl: "",
+    pixelArtPlacement: null,
+    pixelArtZoom: 1,
+    pixelArtShowGrid: true,
+    pixelArtPan: null,
     aiBusy: false,
     imageLoading: false,
     aiController: null,
@@ -55,6 +59,9 @@
   const canvas = $("#patternCanvas");
   const ctx = canvas.getContext("2d", { alpha: false });
   const canvasScroller = $("#canvasScroller");
+  const pixelArtCanvas = $("#pixelArtCanvas");
+  const pixelArtContext = pixelArtCanvas.getContext("2d", { alpha: false });
+  const pixelArtScroller = $("#pixelArtScroller");
   const paletteList = $("#paletteList");
   const pixelArtEndpoint = String(window.PIXEL_ART_API_URL || "").trim();
   let lastUsedSignature = "";
@@ -65,7 +72,13 @@
     button.disabled = !state.sourceImage || !pixelArtEndpoint || state.aiBusy || state.imageLoading;
     button.textContent = state.aiBusy ? "像素画生成中…" : "生成像素画并更新图纸";
     preview.hidden = !state.pixelArtImage;
-    if (state.pixelArtUrl) $("#pixelArtPreviewImage").src = state.pixelArtUrl;
+    $(".workspace").classList.toggle("has-pixel-art", Boolean(state.pixelArtImage));
+    $("#pixelGridToggle").classList.toggle("active", state.pixelArtShowGrid);
+    $("#pixelGridToggle").setAttribute("aria-pressed", String(state.pixelArtShowGrid));
+    if (!state.pixelArtImage) {
+      finishPixelArtPan();
+      pixelArtCanvas.width = pixelArtCanvas.height = 1;
+    }
     $("#pixelArtStatus").textContent = state.aiBusy
       ? "AI 正在保留主体轮廓并转换为清晰像素风格，完成后会自动映射 MARD 色号。"
       : state.pixelArtImage
@@ -125,6 +138,7 @@
     $("#patternSizeReadout").textContent = String(state.patternLongSide);
     $("#patternSizeRange").value = String(state.patternLongSide);
     $("#canvasDimensions").textContent = `${state.boardSize} × ${state.boardSize}`;
+    $("#pixelCanvasDimensions").textContent = `${state.boardSize} × ${state.boardSize}`;
     $("#canvasMetaSize").textContent = `豆板 ${state.boardSize} × ${state.boardSize} · 图案 ${state.designWidth} × ${state.designHeight}`;
   }
 
@@ -156,19 +170,19 @@
     return { x: Math.floor((state.boardSize - state.designWidth) / 2), y: Math.floor((state.boardSize - state.designHeight) / 2) };
   }
 
-  function cellSize() {
+  function cellSize(scroller = canvasScroller, zoomKey = "zoom") {
     const preferred = state.boardSize === 52 ? 18 : 14;
-    if (!canvasScroller.clientWidth || !canvasScroller.clientHeight) return preferred;
-    const style = getComputedStyle(canvasScroller);
+    if (!scroller.clientWidth || !scroller.clientHeight) return preferred;
+    const style = getComputedStyle(scroller);
     const paddingX = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
     const paddingY = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
     const available = Math.max(1, Math.min(
-      (canvasScroller.clientWidth - paddingX) / state.boardSize,
-      (canvasScroller.clientHeight - paddingY) / state.boardSize,
+      (scroller.clientWidth - paddingX) / state.boardSize,
+      (scroller.clientHeight - paddingY) / state.boardSize,
     ));
     const fitted = Math.max(1, Math.min(preferred, available));
-    state.zoom = Math.min(state.zoom, 32 / fitted);
-    return Math.max(1, fitted * state.zoom);
+    state[zoomKey] = Math.min(state[zoomKey], 32 / fitted);
+    return Math.max(1, fitted * state[zoomKey]);
   }
   function codeFontSize(cell) { return Math.max(4, Math.min(15, cell * 0.72)); }
 
@@ -231,6 +245,54 @@
 
   function stepAt(index) { return state.guideSteps[index] || null; }
 
+  function drawPixelArtPreview() {
+    flushPendingPatternResize();
+    if (!state.pixelArtImage || $("#pixelArtPreviewPanel").hidden) return;
+    const cell = cellSize(pixelArtScroller, "pixelArtZoom");
+    const boardPx = state.boardSize * cell;
+    // The reference has no color labels, so a smaller bitmap keeps two boards light on mobile.
+    const pixelRatio = Math.min(2, window.devicePixelRatio || 1, 2048 / boardPx);
+    pixelArtCanvas.width = Math.round(boardPx * pixelRatio);
+    pixelArtCanvas.height = Math.round(boardPx * pixelRatio);
+    pixelArtCanvas.style.width = `${boardPx}px`;
+    pixelArtCanvas.style.height = `${boardPx}px`;
+    pixelArtContext.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    pixelArtContext.fillStyle = "#fff";
+    pixelArtContext.fillRect(0, 0, boardPx, boardPx);
+    const placement = state.pixelArtPlacement || { width: state.designWidth, height: state.designHeight, x: 0, y: 0 };
+    const pos = offset();
+    const left = (pos.x + placement.x) * cell, top = (pos.y + placement.y) * cell;
+    const width = placement.width * cell, height = placement.height * cell;
+    const image = state.pixelArtImage;
+    const scale = state.fit === "cover"
+      ? Math.max(width / image.naturalWidth, height / image.naturalHeight)
+      : Math.min(width / image.naturalWidth, height / image.naturalHeight);
+    const imageWidth = image.naturalWidth * scale, imageHeight = image.naturalHeight * scale;
+    pixelArtContext.save();
+    pixelArtContext.beginPath();
+    pixelArtContext.rect(left, top, width, height);
+    pixelArtContext.clip();
+    pixelArtContext.imageSmoothingEnabled = false;
+    pixelArtContext.drawImage(image, left + (width - imageWidth) / 2, top + (height - imageHeight) / 2, imageWidth, imageHeight);
+    pixelArtContext.restore();
+    drawBoardGrid(pixelArtContext, cell, false, state.pixelArtShowGrid);
+    pixelArtCanvas.setAttribute("aria-label", `AI 像素画参考，${state.boardSize} × ${state.boardSize} 豆板，图案 ${placement.width} × ${placement.height} 格`);
+  }
+
+  function finishPixelArtPan() {
+    const pointerId = state.pixelArtPan?.pointerId;
+    state.pixelArtPan = null;
+    pixelArtCanvas.classList.remove("dragging");
+    if (pointerId !== undefined && pixelArtCanvas.hasPointerCapture?.(pointerId)) pixelArtCanvas.releasePointerCapture(pointerId);
+  }
+
+  function zoomPixelArt(factor) {
+    finishPixelArtPan();
+    state.pixelArtZoom = factor === null ? 1 : Math.max(0.55, Math.min(12, state.pixelArtZoom * factor));
+    drawPixelArtPreview();
+    if (factor === null) pixelArtScroller.scrollLeft = pixelArtScroller.scrollTop = 0;
+  }
+
   function drawPattern() {
     flushPendingPatternResize();
     const cell = cellSize(), boardPx = state.boardSize * cell, pos = offset();
@@ -282,6 +344,7 @@
         });
       }
     }
+    drawPixelArtPreview();
   }
 
   function countColors() {
@@ -477,6 +540,7 @@
       height: state.designHeight,
       longSide: state.patternLongSide,
       origin: state.designOrigin ? { ...state.designOrigin } : null,
+      pixelArtPlacement: state.pixelArtPlacement ? { ...state.pixelArtPlacement } : null,
     };
   }
 
@@ -488,6 +552,7 @@
     state.patternHeight = snapshot.height;
     state.patternLongSide = snapshot.longSide;
     state.designOrigin = snapshot.origin;
+    state.pixelArtPlacement = snapshot.pixelArtPlacement;
     updateBoardUI();
     renderAll();
   }
@@ -534,6 +599,10 @@
     const left = Math.min(pos.x, cell.x), top = Math.min(pos.y, cell.y);
     const width = Math.max(pos.x + state.designWidth, cell.x + 1) - left;
     const height = Math.max(pos.y + state.designHeight, cell.y + 1) - top;
+    if (state.pixelArtPlacement) {
+      state.pixelArtPlacement.x += pos.x - left;
+      state.pixelArtPlacement.y += pos.y - top;
+    }
     const next = Array(width * height).fill(-1);
     for (let y = 0; y < state.designHeight; y += 1) {
       for (let x = 0; x < state.designWidth; x += 1) {
@@ -912,6 +981,9 @@ function applyImage() {
     const pattern = quantizeGridPixels(pixels, sample.width, sample.height, state.designWidth, state.designHeight, backgroundInfo?.outsideMask);
     clearEditHistory();
     state.pattern = pattern;
+    state.pixelArtPlacement = state.pixelArtImage
+      ? { width: state.designWidth, height: state.designHeight, x: 0, y: 0 }
+      : null;
     if (state.colorFilter !== null && !state.pattern.includes(state.colorFilter)) state.colorFilter = null;
     state.patternWidth = state.designWidth;
     state.patternHeight = state.designHeight;
@@ -944,8 +1016,9 @@ function applyImage() {
       state.sourceFile = file;
       state.pixelArtImage = null;
       state.pixelArtUrl = "";
+      state.pixelArtPlacement = null;
+      state.pixelArtZoom = 1;
       state.aiBusy = false;
-      $("#pixelArtPreviewImage").removeAttribute("src");
       state.sourceAspectRatio = image.naturalWidth / Math.max(1, image.naturalHeight);
       state.aspectRatio = state.sourceAspectRatio;
       const dimensions = dimensionsForLongSide(state.patternLongSide, state.aspectRatio);
@@ -1022,6 +1095,8 @@ function applyImage() {
       state.pixelArtUrl = url;
       pendingImageUrl = "";
       state.pixelArtImage = image;
+      state.pixelArtZoom = 1;
+      pixelArtScroller.scrollLeft = pixelArtScroller.scrollTop = 0;
       state.aspectRatio = image.naturalWidth / Math.max(1, image.naturalHeight);
       const dimensions = dimensionsForLongSide(state.patternLongSide, state.aspectRatio);
       state.designWidth = dimensions.width;
@@ -1051,7 +1126,8 @@ function applyImage() {
     if (state.pixelArtUrl) URL.revokeObjectURL(state.pixelArtUrl);
     state.pixelArtImage = null;
     state.pixelArtUrl = "";
-    $("#pixelArtPreviewImage").removeAttribute("src");
+    state.pixelArtPlacement = null;
+    state.pixelArtZoom = 1;
     state.aspectRatio = state.sourceAspectRatio;
     const dimensions = dimensionsForLongSide(state.patternLongSide, state.aspectRatio);
     state.designWidth = dimensions.width;
@@ -1132,6 +1208,32 @@ function applyImage() {
   upload.addEventListener("drop", (event) => { event.preventDefault(); upload.classList.remove("dragging"); readImage(event.dataTransfer.files[0]); });
   $("#generateAiButton").addEventListener("click", generateAiPixelArt);
   $("#restoreOriginalButton").addEventListener("click", restoreOriginalImage);
+  $("#pixelGridToggle").addEventListener("click", () => {
+    state.pixelArtShowGrid = !state.pixelArtShowGrid;
+    updatePixelArtUI();
+    drawPixelArtPreview();
+  });
+  $("#pixelZoomOut").addEventListener("click", () => zoomPixelArt(1 / 1.2));
+  $("#pixelZoomFit").addEventListener("click", () => zoomPixelArt(null));
+  $("#pixelZoomIn").addEventListener("click", () => zoomPixelArt(1.2));
+  pixelArtCanvas.addEventListener("pointerdown", (event) => {
+    if (!state.pixelArtImage || event.isPrimary === false || event.pointerType !== "mouse" || event.button !== 0) return;
+    event.preventDefault();
+    state.pixelArtPan = {
+      pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+      left: pixelArtScroller.scrollLeft, top: pixelArtScroller.scrollTop,
+    };
+    pixelArtCanvas.classList.add("dragging");
+    pixelArtCanvas.setPointerCapture?.(event.pointerId);
+  });
+  pixelArtCanvas.addEventListener("pointermove", (event) => {
+    const pan = state.pixelArtPan;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    pixelArtScroller.scrollLeft = pan.left - (event.clientX - pan.x);
+    pixelArtScroller.scrollTop = pan.top - (event.clientY - pan.y);
+  });
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach((type) => pixelArtCanvas.addEventListener(type, finishPixelArtPan));
   document.querySelectorAll("[data-board]").forEach((button) => button.addEventListener("click", () => setBoardSize(Number(button.dataset.board))));
   $("#patternSizeRange").addEventListener("input", (event) => {
     clearEditHistory();
@@ -1230,7 +1332,7 @@ function applyImage() {
     if (state.sourceImage?.src?.startsWith("blob:")) URL.revokeObjectURL(state.sourceImage.src);
     if (state.pixelArtUrl) URL.revokeObjectURL(state.pixelArtUrl);
     state.sourceImage = null; state.sourceFile = null; state.pixelArtImage = null; state.pixelArtUrl = ""; state.aiBusy = false; state.imageLoading = false;
-    $("#pixelArtPreviewImage").removeAttribute("src");
+    state.pixelArtPlacement = null; state.pixelArtZoom = 1; state.pixelArtShowGrid = true;
     state.boardSize = 52; state.patternLongSide = 52; state.designWidth = 52; state.designHeight = 52; state.aspectRatio = 1; state.sourceAspectRatio = 1;
     state.fit = "contain"; state.showGrid = true; state.assistant = false; state.contrast = 0; state.saturation = 0; state.removeBackground = true; state.fillInterior = true; state.zoom = 1; state.colorFilter = null; state.guideIndex = 0; state.guideSteps = [];
     state.editing = false; state.editTool = "paint"; state.editColor = colorAt("H1");
@@ -1250,5 +1352,9 @@ function applyImage() {
   state.patternHeight = state.designHeight;
   updateBoardUI(); updatePixelArtUI(); renderPalette(); renderAll();
   window.addEventListener("resize", drawPattern, { passive: true });
-  if (typeof ResizeObserver === "function") new ResizeObserver(drawPattern).observe(canvasScroller);
+  if (typeof ResizeObserver === "function") {
+    const observer = new ResizeObserver(drawPattern);
+    observer.observe(canvasScroller);
+    observer.observe(pixelArtScroller);
+  }
 })();

@@ -8,10 +8,10 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="styles.css?v=20261009-editor" />
+    <link rel="stylesheet" href="styles.css?v=20261009-pixel-board" />
     <script src="mard-app.js" defer></script>
     <script src="ai-config.js" defer></script>
-    <script src="board-app.js?v=20261009-editor" defer></script>
+    <script src="board-app.js?v=20261009-pixel-board" defer></script>
   </head>
   <body data-board-app>
     <header class="topbar">
@@ -96,9 +96,22 @@
         <section class="pixel-art-preview" id="pixelArtPreviewPanel" aria-label="像素画参考" hidden>
           <div class="pixel-reference-heading">
             <h2>像素画</h2>
-            <button class="button button-quiet restore-image-button" id="restoreOriginalButton" type="button">改用原图</button>
+            <div class="canvas-tools pixel-reference-tools">
+              <button class="tool-button active" id="pixelGridToggle" type="button" aria-pressed="true"><span class="tool-grid-icon">▦</span> 显示网格</button>
+              <button class="tool-button zoom-control" id="pixelZoomOut" type="button" aria-label="缩小像素画" title="缩小像素画">−</button>
+              <button class="tool-button zoom-fit" id="pixelZoomFit" type="button">适应屏幕</button>
+              <button class="tool-button zoom-control" id="pixelZoomIn" type="button" aria-label="放大像素画" title="放大像素画">+</button>
+              <span class="canvas-size-pill"><span class="pill-dot"></span><span id="pixelCanvasDimensions">52 × 52</span></span>
+              <button class="button button-quiet restore-image-button" id="restoreOriginalButton" type="button">改用原图</button>
+            </div>
           </div>
-          <div class="pixel-reference-image"><img id="pixelArtPreviewImage" alt="AI生成的像素画参考图" /></div>
+          <div class="pixel-reference-frame board-view-frame" id="pixelArtFrame">
+            <div class="pixel-reference-scroller" id="pixelArtScroller">
+              <div class="canvas-content">
+                <canvas id="pixelArtCanvas" aria-label="AI 像素画参考，居中放置在所选豆板网格上"></canvas>
+              </div>
+            </div>
+          </div>
         </section>
         <div class="workspace-heading">
           <div><h1>拼豆图纸</h1><p class="workspace-subtitle" id="canvasSubtitle">方格画布已就绪，导入图片开始制作</p></div>
@@ -127,7 +140,7 @@
           <small class="edit-hint" id="editHint" role="status" aria-live="polite">选色后点击或拖动格点修改。</small>
         </div>
 
-        <div class="canvas-frame" id="canvasFrame">
+        <div class="canvas-frame board-view-frame" id="canvasFrame">
           <div class="canvas-meta"><span><span class="meta-dot"></span> 编辑中</span><span class="mono" id="canvasMetaSize">32 × 32 px</span></div>
           <div class="canvas-scroller" id="canvasScroller">
             <div class="canvas-content" id="canvasContent">
