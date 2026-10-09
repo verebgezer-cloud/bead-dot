@@ -22,6 +22,14 @@
     fit: "contain",
     showGrid: true,
     assistant: false,
+    editing: false,
+    editTool: "paint",
+    editColor: colorAt("H1"),
+    designOrigin: null,
+    undoHistory: [],
+    redoHistory: [],
+    activeStroke: null,
+    activePan: null,
     contrast: 0,
     saturation: 0,
     removeBackground: true,
@@ -70,6 +78,7 @@
   }
 
   function makeDemo(width, height) {
+    clearEditHistory();
     const background = colorAt("H1"), fill = colorAt("M1"), edge = colorAt("H7");
     const eye = colorAt("H7"), nose = colorAt("F2"), ear = colorAt("G4");
     state.designWidth = width;
@@ -131,16 +140,19 @@
 
   function setBoardSize(size) {
     if (![52, 78, 104, 120].includes(size)) return;
+    if (size === state.boardSize) return;
     if (size < state.patternLongSide) {
       toast(`当前图案最长边为 ${state.patternLongSide} 格，请先缩小图案`);
       return;
     }
+    clearEditHistory();
     state.boardSize = size;
     updateBoardUI();
     renderAll();
   }
 
   function offset() {
+    if (state.designOrigin) return state.designOrigin;
     return { x: Math.floor((state.boardSize - state.designWidth) / 2), y: Math.floor((state.boardSize - state.designHeight) / 2) };
   }
 
@@ -154,7 +166,9 @@
       (canvasScroller.clientWidth - paddingX) / state.boardSize,
       (canvasScroller.clientHeight - paddingY) / state.boardSize,
     ));
-    return Math.max(1, Math.min(preferred, available) * state.zoom);
+    const fitted = Math.max(1, Math.min(preferred, available));
+    state.zoom = Math.min(state.zoom, 32 / fitted);
+    return Math.max(1, fitted * state.zoom);
   }
   function codeFontSize(cell) { return Math.max(4, Math.min(15, cell * 0.72)); }
 
@@ -220,7 +234,8 @@
   function drawPattern() {
     flushPendingPatternResize();
     const cell = cellSize(), boardPx = state.boardSize * cell, pos = offset();
-    const pixelRatio = Math.min(2, window.devicePixelRatio || 1);
+    // Keep enlarged boards within the canvas memory limit of mobile browsers.
+    const pixelRatio = Math.min(2, window.devicePixelRatio || 1, 4096 / boardPx);
     canvas.width = Math.round(boardPx * pixelRatio);
     canvas.height = Math.round(boardPx * pixelRatio);
     canvas.style.width = `${boardPx}px`;
@@ -283,14 +298,22 @@
     paletteList.innerHTML = usedIndices.length ? usedIndices.map((index) => {
       const color = COLORS[index];
       const filtered = state.assistant && state.colorFilter === index;
-      return `<button class="color-row${filtered ? " filter-active" : ""}" type="button" role="listitem" data-color="${index}" aria-pressed="${filtered}" aria-label="${color.code}，${color.family}${state.assistant ? "，点击筛选此色" : "，请先开启辅助拼豆"}"><span class="color-swatch" style="background:${color.hex}"></span><span class="color-info"><strong>${color.code} · ${color.family}</strong><span class="color-code">MARD 221 · ${color.hex}</span></span><span class="color-quantity">${counts[index]}<small>颗</small></span></button>`;
+      const selected = state.editing && state.editColor === index;
+      return `<button class="color-row${filtered ? " filter-active" : ""}${selected ? " edit-selected" : ""}" type="button" role="listitem" data-color="${index}" aria-pressed="${filtered || selected}" aria-label="${color.code}，${color.family}${state.editing ? "，点击用此色绘制" : state.assistant ? "，点击筛选此色" : "，请先开启辅助拼豆或手动修改"}"><span class="color-swatch" style="background:${color.hex}"></span><span class="color-info"><strong>${color.code} · ${color.family}</strong><span class="color-code">MARD 221 · ${color.hex}</span></span><span class="color-quantity">${counts[index]}<small>颗</small></span></button>`;
     }).join("") : '<p class="empty-palette">图纸暂未使用任何 MARD 色号。</p>';
     paletteList.querySelectorAll("[data-color]").forEach((button) => button.addEventListener("click", () => {
-      if (!state.assistant) {
-        toast("请先开启辅助拼豆，再点选色号筛选位置");
+      const index = Number(button.dataset.color);
+      if (state.editing) {
+        state.editColor = index;
+        state.editTool = "paint";
+        updateEditUI();
+        renderPalette();
         return;
       }
-      const index = Number(button.dataset.color);
+      if (!state.assistant) {
+        toast("开启手动修改可选色绘制；开启辅助拼豆可筛选色号");
+        return;
+      }
       state.colorFilter = state.colorFilter === index ? null : index;
       updateAssistant();
       renderPalette();
@@ -394,6 +417,251 @@
     drawPattern();
     updateCounts();
     updateSubtitle();
+    updateEditUI();
+  }
+
+  function updateEditUI() {
+    const toggle = $("#editToggle");
+    if (!toggle) return;
+    const color = COLORS[state.editColor];
+    toggle.classList.toggle("active", state.editing);
+    toggle.setAttribute("aria-pressed", String(state.editing));
+    $("#editorToolbar").hidden = !state.editing;
+    $("#editColor").value = String(state.editColor);
+    $("#editSwatch").style.background = color.hex;
+    $("#editSwatch").title = `${color.code} · ${color.hex}`;
+    ["paint", "erase", "pick", "pan"].forEach((tool) => {
+      const button = $(`#${tool}Tool`);
+      if (!button) return;
+      button.classList.toggle("active", state.editTool === tool);
+      button.setAttribute("aria-pressed", String(state.editTool === tool));
+    });
+    $("#undoEdit").disabled = !state.undoHistory.length || Boolean(state.activeStroke);
+    $("#redoEdit").disabled = !state.redoHistory.length || Boolean(state.activeStroke);
+    const toolHint = state.editTool === "pan"
+      ? "拖动浏览放大的图纸"
+      : state.editTool === "erase"
+      ? "点按或拖动移除豆点"
+      : state.editTool === "pick"
+        ? "点按格子吸取色号"
+        : `${color.code} · 点按或拖动改色`;
+    $("#editHint").textContent = `${toolHint}；重新生成或调整图片设置会覆盖修改`;
+    canvas.classList.toggle("editing", state.editing && state.editTool !== "pan");
+    canvas.classList.toggle("picking", state.editing && state.editTool === "pick");
+    canvas.classList.toggle("panning", state.editing && state.editTool === "pan");
+    canvas.classList.toggle("dragging", Boolean(state.activePan));
+    canvas.setAttribute("aria-label", state.editing
+      ? "可编辑拼豆图纸，选择色号后点按或拖动格子"
+      : "拼豆图纸画布，格内显示 MARD 色号");
+  }
+
+  function setEditing(enabled) {
+    finishEditStroke();
+    flushPendingPatternResize();
+    state.editing = enabled;
+    if (enabled) {
+      state.assistant = false;
+      state.colorFilter = null;
+      $("#assistantToggle").checked = false;
+      updateAssistant();
+    }
+    updateEditUI();
+    renderPalette();
+    drawPattern();
+  }
+
+  function editSnapshot() {
+    return {
+      pattern: state.pattern.slice(),
+      width: state.designWidth,
+      height: state.designHeight,
+      longSide: state.patternLongSide,
+      origin: state.designOrigin ? { ...state.designOrigin } : null,
+    };
+  }
+
+  function restoreEditSnapshot(snapshot) {
+    state.pattern = snapshot.pattern;
+    state.designWidth = snapshot.width;
+    state.designHeight = snapshot.height;
+    state.patternWidth = snapshot.width;
+    state.patternHeight = snapshot.height;
+    state.patternLongSide = snapshot.longSide;
+    state.designOrigin = snapshot.origin;
+    updateBoardUI();
+    renderAll();
+  }
+
+  function clearEditHistory() {
+    finishPan();
+    const pointerId = state.activeStroke?.pointerId;
+    state.activeStroke = null;
+    if (pointerId !== undefined && canvas.hasPointerCapture?.(pointerId)) canvas.releasePointerCapture(pointerId);
+    state.undoHistory = [];
+    state.redoHistory = [];
+    state.designOrigin = null;
+    updateEditUI();
+  }
+
+  function changeEditHistory(direction) {
+    finishEditStroke();
+    const source = direction === "undo" ? state.undoHistory : state.redoHistory;
+    const target = direction === "undo" ? state.redoHistory : state.undoHistory;
+    const snapshot = source.pop();
+    if (!snapshot) return;
+    target.push(editSnapshot());
+    restoreEditSnapshot(snapshot);
+  }
+
+  function boardCellAtPointer(event) {
+    const bounds = canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return null;
+    const x = Math.floor((event.clientX - bounds.left) * state.boardSize / bounds.width);
+    const y = Math.floor((event.clientY - bounds.top) * state.boardSize / bounds.height);
+    return x >= 0 && y >= 0 && x < state.boardSize && y < state.boardSize ? { x, y } : null;
+  }
+
+  function patternIndexAtBoardCell(cell) {
+    const pos = offset();
+    const x = cell.x - pos.x, y = cell.y - pos.y;
+    return x >= 0 && y >= 0 && x < state.designWidth && y < state.designHeight
+      ? y * state.designWidth + x
+      : -1;
+  }
+
+  function expandPatternToCell(cell) {
+    const pos = offset();
+    const left = Math.min(pos.x, cell.x), top = Math.min(pos.y, cell.y);
+    const width = Math.max(pos.x + state.designWidth, cell.x + 1) - left;
+    const height = Math.max(pos.y + state.designHeight, cell.y + 1) - top;
+    const next = Array(width * height).fill(-1);
+    for (let y = 0; y < state.designHeight; y += 1) {
+      for (let x = 0; x < state.designWidth; x += 1) {
+        next[(y + pos.y - top) * width + x + pos.x - left] = state.pattern[y * state.designWidth + x];
+      }
+    }
+    state.pattern = next;
+    state.designOrigin = { x: left, y: top };
+    state.designWidth = width;
+    state.designHeight = height;
+    state.patternWidth = width;
+    state.patternHeight = height;
+    state.patternLongSide = Math.max(width, height);
+    updateBoardUI();
+    return (cell.y - top) * width + cell.x - left;
+  }
+
+  function paintBoardCell(cell) {
+    const stroke = state.activeStroke;
+    if (!stroke) return;
+    let index = patternIndexAtBoardCell(cell);
+    if (index < 0) {
+      if (stroke.tool === "erase") return;
+      index = expandPatternToCell(cell);
+    }
+    const next = stroke.tool === "erase" ? -1 : stroke.color;
+    if (state.pattern[index] === next) return;
+    state.pattern[index] = next;
+    stroke.changed = true;
+  }
+
+  function paintStrokeLine(from, to) {
+    // Fill skipped cells during fast mouse or touch movement.
+    let x = from.x, y = from.y;
+    const dx = Math.abs(to.x - x), sx = x < to.x ? 1 : -1;
+    const dy = -Math.abs(to.y - y), sy = y < to.y ? 1 : -1;
+    let error = dx + dy;
+    while (true) {
+      paintBoardCell({ x, y });
+      if (x === to.x && y === to.y) break;
+      const twiceError = 2 * error;
+      if (twiceError >= dy) { error += dy; x += sx; }
+      if (twiceError <= dx) { error += dx; y += sy; }
+    }
+  }
+
+  function beginEditStroke(event) {
+    if (!state.editing || event.isPrimary === false || (event.pointerType === "mouse" && event.button !== 0)) return;
+    if (state.editTool === "pan") {
+      if (event.pointerType === "touch") return;
+      event.preventDefault();
+      state.activePan = {
+        pointerId: event.pointerId, x: event.clientX, y: event.clientY,
+        left: canvasScroller.scrollLeft, top: canvasScroller.scrollTop,
+      };
+      canvas.setPointerCapture?.(event.pointerId);
+      updateEditUI();
+      return;
+    }
+    event.preventDefault();
+    flushPendingPatternResize();
+    const cell = boardCellAtPointer(event);
+    if (!cell) return;
+    if (state.editTool === "pick") {
+      const index = patternIndexAtBoardCell(cell);
+      const color = index >= 0 ? state.pattern[index] : -1;
+      if (color < 0) { toast("这个位置没有豆点"); return; }
+      state.editColor = color;
+      state.editTool = "paint";
+      updateEditUI();
+      renderPalette();
+      return;
+    }
+    finishEditStroke();
+    state.activeStroke = {
+      pointerId: event.pointerId,
+      before: editSnapshot(),
+      tool: state.editTool,
+      color: state.editColor,
+      lastCell: cell,
+      changed: false,
+    };
+    canvas.setPointerCapture?.(event.pointerId);
+    paintBoardCell(cell);
+    drawPattern();
+    updateCounts();
+    updateEditUI();
+  }
+
+  function moveEditStroke(event) {
+    if (state.activePan?.pointerId === event.pointerId) {
+      event.preventDefault();
+      canvasScroller.scrollLeft = state.activePan.left - (event.clientX - state.activePan.x);
+      canvasScroller.scrollTop = state.activePan.top - (event.clientY - state.activePan.y);
+      return;
+    }
+    const stroke = state.activeStroke;
+    if (!stroke || stroke.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const cell = boardCellAtPointer(event);
+    if (!cell) { stroke.lastCell = null; return; }
+    if (stroke.lastCell) paintStrokeLine(stroke.lastCell, cell);
+    else paintBoardCell(cell);
+    stroke.lastCell = cell;
+    drawPattern();
+    updateCounts();
+  }
+
+  function finishEditStroke(event) {
+    finishPan(event);
+    const stroke = state.activeStroke;
+    if (!stroke || (event && event.pointerId !== stroke.pointerId)) return;
+    state.activeStroke = null;
+    if (canvas.hasPointerCapture?.(stroke.pointerId)) canvas.releasePointerCapture(stroke.pointerId);
+    if (stroke.changed) {
+      state.undoHistory.push(stroke.before);
+      if (state.undoHistory.length > 60) state.undoHistory.shift();
+      state.redoHistory = [];
+      renderAll();
+    } else updateEditUI();
+  }
+
+  function finishPan(event) {
+    const pan = state.activePan;
+    if (!pan || (event && event.pointerId !== pan.pointerId)) return;
+    state.activePan = null;
+    if (canvas.hasPointerCapture?.(pan.pointerId)) canvas.releasePointerCapture(pan.pointerId);
+    updateEditUI();
   }
 
   function rgbToLab(r, g, b) {
@@ -625,6 +893,9 @@
 function applyImage() {
     const image = state.pixelArtImage || state.sourceImage;
     if (!image) return;
+    const dimensions = dimensionsForLongSide(state.patternLongSide, state.aspectRatio);
+    state.designWidth = dimensions.width;
+    state.designHeight = dimensions.height;
     const samplesPerBead = 4;
     const sample = document.createElement("canvas");
     sample.width = state.designWidth * samplesPerBead;
@@ -638,10 +909,13 @@ function applyImage() {
     sampleContext.drawImage(image, (sample.width - width) / 2, (sample.height - height) / 2, width, height);
     const pixels = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
     const backgroundInfo = findEdgeBackgroundMask(pixels, sample.width, sample.height);
-    state.pattern = quantizeGridPixels(pixels, sample.width, sample.height, state.designWidth, state.designHeight, backgroundInfo?.outsideMask);
+    const pattern = quantizeGridPixels(pixels, sample.width, sample.height, state.designWidth, state.designHeight, backgroundInfo?.outsideMask);
+    clearEditHistory();
+    state.pattern = pattern;
     if (state.colorFilter !== null && !state.pattern.includes(state.colorFilter)) state.colorFilter = null;
     state.patternWidth = state.designWidth;
     state.patternHeight = state.designHeight;
+    updateDesignUI();
   }
 
   function toast(message) {
@@ -860,6 +1134,7 @@ function applyImage() {
   $("#restoreOriginalButton").addEventListener("click", restoreOriginalImage);
   document.querySelectorAll("[data-board]").forEach((button) => button.addEventListener("click", () => setBoardSize(Number(button.dataset.board))));
   $("#patternSizeRange").addEventListener("input", (event) => {
+    clearEditHistory();
     state.patternLongSide = Number(event.currentTarget.value);
     const dimensions = dimensionsForLongSide(state.patternLongSide, state.aspectRatio);
     state.designWidth = dimensions.width;
@@ -910,10 +1185,36 @@ function applyImage() {
     event.currentTarget.classList.toggle("active", state.showGrid);
     event.currentTarget.setAttribute("aria-pressed", String(state.showGrid)); drawPattern();
   });
-  $("#zoomOut").addEventListener("click", () => { state.zoom = Math.max(0.55, state.zoom / 1.2); drawPattern(); });
-  $("#zoomFit").addEventListener("click", () => { state.zoom = 1; drawPattern(); });
-  $("#zoomIn").addEventListener("click", () => { state.zoom = Math.min(3, state.zoom * 1.2); drawPattern(); });
+  const editColorSelect = $("#editColor");
+  if (editColorSelect) {
+    editColorSelect.innerHTML = COLORS.map((color, index) => `<option value="${index}">${color.code} · ${color.family} · ${color.hex}</option>`).join("");
+    editColorSelect.addEventListener("change", (event) => {
+      finishEditStroke();
+      state.editColor = Number(event.currentTarget.value);
+      state.editTool = "paint";
+      updateEditUI();
+      renderPalette();
+    });
+  }
+  $("#editToggle")?.addEventListener("click", () => setEditing(!state.editing));
+  ["paint", "erase", "pick", "pan"].forEach((tool) => $(`#${tool}Tool`)?.addEventListener("click", () => {
+    finishEditStroke();
+    state.editTool = tool;
+    updateEditUI();
+  }));
+  $("#undoEdit")?.addEventListener("click", () => changeEditHistory("undo"));
+  $("#redoEdit")?.addEventListener("click", () => changeEditHistory("redo"));
+  canvas.addEventListener("pointerdown", beginEditStroke);
+  canvas.addEventListener("pointermove", moveEditStroke);
+  canvas.addEventListener("pointerup", (event) => { moveEditStroke(event); finishEditStroke(event); });
+  canvas.addEventListener("pointercancel", finishEditStroke);
+  canvas.addEventListener("lostpointercapture", finishEditStroke);
+  canvas.addEventListener("contextmenu", (event) => { if (state.editing) event.preventDefault(); });
+  $("#zoomOut").addEventListener("click", () => { finishEditStroke(); state.zoom = Math.max(0.55, state.zoom / 1.2); drawPattern(); });
+  $("#zoomFit").addEventListener("click", () => { finishEditStroke(); state.zoom = 1; drawPattern(); });
+  $("#zoomIn").addEventListener("click", () => { finishEditStroke(); state.zoom = Math.min(12, state.zoom * 1.2); drawPattern(); });
   $("#assistantToggle").addEventListener("change", (event) => {
+    if (event.target.checked && state.editing) setEditing(false);
     state.assistant = event.target.checked; state.guideIndex = 0; state.colorFilter = null;
     if (state.assistant) state.guideSteps = buildGuideSteps();
     updateAssistant(); renderPalette(); drawPattern();
@@ -932,6 +1233,7 @@ function applyImage() {
     $("#pixelArtPreviewImage").removeAttribute("src");
     state.boardSize = 52; state.patternLongSide = 52; state.designWidth = 52; state.designHeight = 52; state.aspectRatio = 1; state.sourceAspectRatio = 1;
     state.fit = "contain"; state.showGrid = true; state.assistant = false; state.contrast = 0; state.saturation = 0; state.removeBackground = true; state.fillInterior = true; state.zoom = 1; state.colorFilter = null; state.guideIndex = 0; state.guideSteps = [];
+    state.editing = false; state.editTool = "paint"; state.editColor = colorAt("H1");
     $("#imageInput").value = ""; $("#uploadTitle").textContent = "点击上传图片"; $("#uploadCaption").textContent = "或将图片拖到这里";
     $("#contrastRange").value = 0; $("#contrastReadout").textContent = "0";
     $("#saturationRange").value = 0; $("#saturationReadout").textContent = "0";
@@ -948,4 +1250,5 @@ function applyImage() {
   state.patternHeight = state.designHeight;
   updateBoardUI(); updatePixelArtUI(); renderPalette(); renderAll();
   window.addEventListener("resize", drawPattern, { passive: true });
+  if (typeof ResizeObserver === "function") new ResizeObserver(drawPattern).observe(canvasScroller);
 })();
