@@ -12,14 +12,4 @@
 
 色号与 HEX 参考 [Pixel Beads 的 MARD 221 色卡](https://www.pixel-beads.com/zh/mard-bead-color-chart)，包含 A、B、C、D、E、F、G、H、M 系。屏幕、打印机和实物拼豆之间可能存在色差，请按实物珠子核对。
 
-## AI 接口部署
 
-GitHub Pages 不能安全保存图像模型 API 密钥。`pixel-art-worker` 是可选的服务端接口，部署步骤：
-
-1. 注册 Cloudflare 账号并安装 Node.js。进入 `pixel-art-worker` 目录，运行 `npx wrangler login`。PowerShell 若拦截 `npx.ps1`，可用 `npx.cmd wrangler login`。
-2. 修改 `wrangler.toml` 中的 `ALLOWED_ORIGINS` 为 GitHub Pages 的来源域名，例如 `https://yourname.github.io`，不要添加仓库路径。
-3. 运行 `npx wrangler deploy` 部署 Worker，并记下输出的 `https://...workers.dev` 地址。首次部署时按提示注册一个 `workers.dev` 子域名。
-4. 运行 `npx wrangler secret put OPENAI_API_KEY`，在提示中输入 OpenAI API 密钥；密钥只会保存在 Worker，不会进入网页代码或 Git 仓库。
-5. 在网站的 `ai-config.js` 中将 `window.PIXEL_ART_API_URL` 设为 Worker 地址，再将 `index.html`、`styles.css`、`mard-app.js`、`board-app.js`、`ai-config.js` 上传到 GitHub Pages。
-
-Worker 限制上传图片为 6 MB 以内的 PNG/JPG/WebP，并暂时设置每个 IP 每 60 秒最多生成 1 次。调用图像模型会产生 API 费用，具体取决于你账户使用的模型与计费方式。请确保 `ALLOWED_ORIGINS` 与你的公开网站来源一致；本地调试时可以暂时增加 `http://localhost:...` 作为另一个允许的来源。
